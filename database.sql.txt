@@ -1,0 +1,176 @@
+-- =====================================================
+-- Anime Takip Sistemi
+-- 10 tablo + 1 trigger + 1 view + 2 procedure
+-- =====================================================
+
+CREATE DATABASE AnimeTakipDB;
+GO
+USE AnimeTakipDB;
+GO
+
+-- ---------- TABLOLAR ----------
+
+CREATE TABLE Studyo (
+    StudyoID INT PRIMARY KEY,                 -- Jikan'daki mal_id
+    Ad NVARCHAR(150) NOT NULL UNIQUE
+);
+
+CREATE TABLE Tur (
+    TurID INT PRIMARY KEY,                    -- Jikan'daki genre mal_id
+    Ad NVARCHAR(100) NOT NULL UNIQUE
+);
+
+CREATE TABLE Anime (
+    AnimeID INT PRIMARY KEY,                  -- Jikan'daki mal_id
+    Baslik NVARCHAR(300) NOT NULL,
+    BaslikJaponca NVARCHAR(300) NULL,
+    Format NVARCHAR(30) NULL,                 -- TV, Movie, OVA...
+    BolumSayisi INT NULL,
+    Durum NVARCHAR(50) NULL,                  -- Finished Airing vb.
+    YayinBaslangic DATE NULL,
+    Ozet NVARCHAR(MAX) NULL,
+    MalPuani DECIMAL(4,2) NULL,               -- MyAnimeList'in puani
+    PosterURL NVARCHAR(500) NULL,
+    StudyoID INT NULL REFERENCES Studyo(StudyoID),
+    OrtalamaPuan DECIMAL(4,2) NULL,           -- trigger ile guncellenir
+    PuanSayisi INT NOT NULL DEFAULT 0         -- trigger ile guncellenir
+);
+
+CREATE TABLE Anime_Tur (
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    TurID INT NOT NULL REFERENCES Tur(TurID),
+    PRIMARY KEY (AnimeID, TurID)
+);
+
+CREATE TABLE Bolum (
+    BolumID INT IDENTITY(1,1) PRIMARY KEY,
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    BolumNo INT NOT NULL,
+    Baslik NVARCHAR(300) NULL,
+    YayinTarihi DATE NULL,
+    CONSTRAINT UQ_Bolum UNIQUE (AnimeID, BolumNo)
+);
+
+CREATE TABLE Karakter (
+    KarakterID INT PRIMARY KEY,               -- Jikan'daki character mal_id
+    Ad NVARCHAR(200) NOT NULL,
+    ResimURL NVARCHAR(500) NULL
+);
+
+CREATE TABLE Anime_Karakter (
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    KarakterID INT NOT NULL REFERENCES Karakter(KarakterID),
+    Rol NVARCHAR(30) NULL,                    -- Main / Supporting
+    PRIMARY KEY (AnimeID, KarakterID)
+);
+
+CREATE TABLE Kullanici (
+    KullaniciID INT IDENTITY(1,1) PRIMARY KEY,
+    KullaniciAdi NVARCHAR(50) NOT NULL UNIQUE,
+    Eposta NVARCHAR(150) NOT NULL UNIQUE,
+    SifreHash NVARCHAR(200) NOT NULL,
+    KayitTarihi DATETIME NOT NULL DEFAULT GETDATE()
+);
+
+CREATE TABLE Izleme_Listesi (
+    KullaniciID INT NOT NULL REFERENCES Kullanici(KullaniciID) ON DELETE CASCADE,
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    Durum NVARCHAR(20) NOT NULL
+        CHECK (Durum IN (N'Izliyorum', N'Bitirdim', N'Izlenecek', N'Biraktim')),
+    IzlenenBolum INT NOT NULL DEFAULT 0,
+    EklenmeTarihi DATETIME NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (KullaniciID, AnimeID)
+);
+
+CREATE TABLE Puan_Yorum (
+    PuanYorumID INT IDENTITY(1,1) PRIMARY KEY,
+    KullaniciID INT NOT NULL REFERENCES Kullanici(KullaniciID) ON DELETE CASCADE,
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    Puan INT NOT NULL CHECK (Puan BETWEEN 1 AND 10),
+    Yorum NVARCHAR(1000) NULL,
+    Tarih DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT UQ_PuanYorum UNIQUE (KullaniciID, AnimeID)   -- bir kullanici bir animeye bir puan
+);
+GO
+
+-- ---------- TRIGGER ----------
+-- Puan eklenince/degisince/silinince animenin ortalamasini otomatik gunceller
+
+CREATE TRIGGER trg_PuanGuncelle
+ON Puan_Yorum
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE a
+    SET OrtalamaPuan = (SELECT AVG(CAST(p.Puan AS DECIMAL(4,2)))
+                        FROM Puan_Yorum p WHERE p.AnimeID = a.AnimeID),
+        PuanSayisi   = (SELECT COUNT(*)
+                        FROM Puan_Yorum p WHERE p.AnimeID = a.AnimeID)
+    FROM Anime a
+    WHERE a.AnimeID IN (SELECT AnimeID FROM inserted
+                        UNION
+                        SELECT AnimeID FROM deleted);
+END;
+GO
+
+-- ---------- VIEW ----------
+-- Kullanicilarin en yuksek puan verdigi 50 anime
+
+CREATE VIEW vw_EnYuksekPuanlilar AS
+SELECT TOP 50
+    a.AnimeID, a.Baslik, s.Ad AS Studyo, a.OrtalamaPuan, a.PuanSayisi
+FROM Anime a
+LEFT JOIN Studyo s ON s.StudyoID = a.StudyoID
+WHERE a.PuanSayisi > 0
+ORDER BY a.OrtalamaPuan DESC, a.PuanSayisi DESC;
+GO
+
+-- ---------- PROCEDURE 1 ----------
+-- Izleme listesine ekle, zaten varsa durumunu guncelle
+
+CREATE PROCEDURE sp_ListeyeEkle
+    @KullaniciID INT,
+    @AnimeID INT,
+    @Durum NVARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (SELECT 1 FROM Izleme_Listesi
+               WHERE KullaniciID = @KullaniciID AND AnimeID = @AnimeID)
+        UPDATE Izleme_Listesi
+        SET Durum = @Durum
+        WHERE KullaniciID = @KullaniciID AND AnimeID = @AnimeID;
+    ELSE
+        INSERT INTO Izleme_Listesi (KullaniciID, AnimeID, Durum)
+        VALUES (@KullaniciID, @AnimeID, @Durum);
+END;
+GO
+
+-- ---------- PROCEDURE 2 ----------
+-- Kullanicinin 8+ puan verdigi turlerden, listesinde olmayan 10 anime oner
+
+CREATE PROCEDURE sp_OneriGetir
+    @KullaniciID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP 10 a.AnimeID, a.Baslik, a.MalPuani
+    FROM Anime a
+    WHERE a.AnimeID NOT IN (SELECT AnimeID FROM Izleme_Listesi
+                            WHERE KullaniciID = @KullaniciID)
+      AND EXISTS (
+            SELECT 1
+            FROM Anime_Tur atur
+            WHERE atur.AnimeID = a.AnimeID
+              AND atur.TurID IN (
+                    SELECT at2.TurID
+                    FROM Puan_Yorum p
+                    JOIN Anime_Tur at2 ON at2.AnimeID = p.AnimeID
+                    WHERE p.KullaniciID = @KullaniciID AND p.Puan >= 8))
+    ORDER BY a.MalPuani DESC;
+END;
+GO

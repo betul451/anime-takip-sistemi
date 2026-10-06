@@ -26,7 +26,7 @@ Veri tabanı yönetimi dersi için geliştirdiğim proje. Kullanıcıların anim
 
 \## Veritabanı Yapısı
 
-ER diyagramı: \[diyagram görseli eklenecek]
+!\[ER Diyagramı](er\_diyagrami.jpg)
 
 
 
