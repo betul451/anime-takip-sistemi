@@ -12,7 +12,7 @@ Veri tabanı yönetimi dersi için geliştirdiğim proje. Kullanıcıların anim
 - Veri Çekme: Python (requests, pyodbc) ve AniList GraphQL API
 
 ## Veritabanı Yapısı
-![ER Diyagramı](er_diyagrami.jpg)
+![ER Diyagramı](er_diyagrami.png)
 
 Tablolar (Toplam 10 Tablo):
 - Anime
