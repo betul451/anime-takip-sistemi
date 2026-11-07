@@ -1,6 +1,7 @@
 -- =====================================================
--- Anime Takip Sistemi
--- 10 tablo + 1 trigger + 1 view + 2 procedure
+-- Anime Takip Sistemi (AniList Güncel Şeması)
+-- 11 tablo + 1 trigger + 1 view + 2 procedure
+-- Veri Tabanı Yönetimi Dersi Proje Ödevi
 -- =====================================================
 
 CREATE DATABASE AnimeTakipDB;
@@ -10,53 +11,65 @@ GO
 
 -- ---------- TABLOLAR ----------
 
+-- Animenin yapımcı stüdyo bilgilerini tutan tablo
 CREATE TABLE Studyo (
-    StudyoID INT PRIMARY KEY,                 -- Jikan'daki mal_id
+    StudyoID INT PRIMARY KEY,                 -- AniList stüdyo ID
     Ad NVARCHAR(150) NOT NULL UNIQUE
 );
 
+-- Anime türlerini tutan katman tablosu (Aksiyon, Dram vb.)
 CREATE TABLE Tur (
-    TurID INT PRIMARY KEY,                    -- Jikan'daki genre mal_id
+    TurID INT PRIMARY KEY,                    -- Sistem içi otomatik verilen tür ID
     Ad NVARCHAR(100) NOT NULL UNIQUE
 );
 
+-- Ana anime kataloğu tablosu
 CREATE TABLE Anime (
-    AnimeID INT PRIMARY KEY,                  -- Jikan'daki mal_id
+    AnimeID INT PRIMARY KEY,                  -- AniList Media ID
     Baslik NVARCHAR(300) NOT NULL,
     BaslikJaponca NVARCHAR(300) NULL,
     Format NVARCHAR(30) NULL,                 -- TV, Movie, OVA...
     BolumSayisi INT NULL,
-    Durum NVARCHAR(50) NULL,                  -- Finished Airing vb.
+    Durum NVARCHAR(50) NULL,                  -- Finished, Releasing vb.
     YayinBaslangic DATE NULL,
     Ozet NVARCHAR(MAX) NULL,
-    MalPuani DECIMAL(4,2) NULL,               -- MyAnimeList'in puani
+    MalPuani DECIMAL(4,2) NULL,               -- Kaynak API puanı (0-10 arası)
     PosterURL NVARCHAR(500) NULL,
     StudyoID INT NULL REFERENCES Studyo(StudyoID),
-    OrtalamaPuan DECIMAL(4,2) NULL,           -- trigger ile guncellenir
-    PuanSayisi INT NOT NULL DEFAULT 0         -- trigger ile guncellenir
+    OrtalamaPuan DECIMAL(4,2) NULL,           -- Kullanıcı puanlarından trigger ile güncellenir
+    PuanSayisi INT NOT NULL DEFAULT 0         -- Toplam verilen oy sayısı (trigger günceller)
 );
 
+-- Anime ile Tur arasındaki çoka-çok (N:M) ilişkiyi çözen köprü tablo
 CREATE TABLE Anime_Tur (
     AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
     TurID INT NOT NULL REFERENCES Tur(TurID),
     PRIMARY KEY (AnimeID, TurID)
 );
 
-CREATE TABLE Bolum (
-    BolumID INT IDENTITY(1,1) PRIMARY KEY,
-    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
-    BolumNo INT NOT NULL,
-    Baslik NVARCHAR(300) NULL,
-    YayinTarihi DATE NULL,
-    CONSTRAINT UQ_Bolum UNIQUE (AnimeID, BolumNo)
+-- AniList etiket verilerini tutan tablo (örn: Time Travel, High School)
+CREATE TABLE Etiket (
+    EtiketID INT PRIMARY KEY,                 -- AniList Tag ID
+    Ad NVARCHAR(100) NOT NULL UNIQUE,
+    Kategori NVARCHAR(100) NULL               -- Theme, Setting, Cast vb.
 );
 
+-- Anime ile Etiket arasındaki çoka-çok ilişki ve uygunluk oyu tablosu
+CREATE TABLE Anime_Etiket (
+    AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
+    EtiketID INT NOT NULL REFERENCES Etiket(EtiketID) ON DELETE CASCADE,
+    Oy INT NULL,                               -- Etiketin animeye uygunluk yüzdesi/oyu
+    PRIMARY KEY (AnimeID, EtiketID)
+);
+
+-- Animelerdeki karakter bilgilerini tutan tablo
 CREATE TABLE Karakter (
-    KarakterID INT PRIMARY KEY,               -- Jikan'daki character mal_id
+    KarakterID INT PRIMARY KEY,               -- AniList Character ID
     Ad NVARCHAR(200) NOT NULL,
     ResimURL NVARCHAR(500) NULL
 );
 
+-- Anime ile Karakter arasındaki çoka-çok ilişki ve rol bilgisi tablosu
 CREATE TABLE Anime_Karakter (
     AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
     KarakterID INT NOT NULL REFERENCES Karakter(KarakterID),
@@ -64,6 +77,7 @@ CREATE TABLE Anime_Karakter (
     PRIMARY KEY (AnimeID, KarakterID)
 );
 
+-- Sisteme üye olan kullanıcı bilgilerini tutan tablo
 CREATE TABLE Kullanici (
     KullaniciID INT IDENTITY(1,1) PRIMARY KEY,
     KullaniciAdi NVARCHAR(50) NOT NULL UNIQUE,
@@ -72,6 +86,7 @@ CREATE TABLE Kullanici (
     KayitTarihi DATETIME NOT NULL DEFAULT GETDATE()
 );
 
+-- Kullanıcıların kişisel izleme listelerini tutan tablo
 CREATE TABLE Izleme_Listesi (
     KullaniciID INT NOT NULL REFERENCES Kullanici(KullaniciID) ON DELETE CASCADE,
     AnimeID INT NOT NULL REFERENCES Anime(AnimeID) ON DELETE CASCADE,
@@ -82,6 +97,7 @@ CREATE TABLE Izleme_Listesi (
     PRIMARY KEY (KullaniciID, AnimeID)
 );
 
+-- Kullanıcıların animelere verdiği puan ve yorumları tutan tablo
 CREATE TABLE Puan_Yorum (
     PuanYorumID INT IDENTITY(1,1) PRIMARY KEY,
     KullaniciID INT NOT NULL REFERENCES Kullanici(KullaniciID) ON DELETE CASCADE,
@@ -89,12 +105,12 @@ CREATE TABLE Puan_Yorum (
     Puan INT NOT NULL CHECK (Puan BETWEEN 1 AND 10),
     Yorum NVARCHAR(1000) NULL,
     Tarih DATETIME NOT NULL DEFAULT GETDATE(),
-    CONSTRAINT UQ_PuanYorum UNIQUE (KullaniciID, AnimeID)   -- bir kullanici bir animeye bir puan
+    CONSTRAINT UQ_PuanYorum UNIQUE (KullaniciID, AnimeID)   -- Bir kullanıcı bir animeye tek puan verebilir
 );
 GO
 
 -- ---------- TRIGGER ----------
--- Puan eklenince/degisince/silinince animenin ortalamasini otomatik gunceller
+-- Yeni puan eklenince/güncellenince/silinince Anime tablosundaki ortalama puanı otomatik hesaplar
 
 CREATE TRIGGER trg_PuanGuncelle
 ON Puan_Yorum
@@ -116,7 +132,7 @@ END;
 GO
 
 -- ---------- VIEW ----------
--- Kullanicilarin en yuksek puan verdigi 50 anime
+-- Kullanıcı puanlarına göre en yüksek ortalamaya sahip 50 animeyi stüdyosuyla getiren görünüm
 
 CREATE VIEW vw_EnYuksekPuanlilar AS
 SELECT TOP 50
@@ -128,7 +144,7 @@ ORDER BY a.OrtalamaPuan DESC, a.PuanSayisi DESC;
 GO
 
 -- ---------- PROCEDURE 1 ----------
--- Izleme listesine ekle, zaten varsa durumunu guncelle
+-- Kullanıcının izleme listesine anime ekler; zaten listedeyse durumunu günceller
 
 CREATE PROCEDURE sp_ListeyeEkle
     @KullaniciID INT,
@@ -150,7 +166,7 @@ END;
 GO
 
 -- ---------- PROCEDURE 2 ----------
--- Kullanicinin 8+ puan verdigi turlerden, listesinde olmayan 10 anime oner
+-- Kullanıcının 8+ puan verdiği türlere göre listesinde olmayan ilk 10 animeyi önerir
 
 CREATE PROCEDURE sp_OneriGetir
     @KullaniciID INT
